@@ -5,6 +5,43 @@ export const config = {
 interface DownloadRequest {
   url: string;
   action: 'info' | 'download';
+  scanForViruses?: boolean;
+}
+// --- VirusTotal API integration ---
+const VIRUSTOTAL_API_KEY = globalThis.VIRUSTOTAL_API_KEY || (globalThis.process?.env?.VIRUSTOTAL_API_KEY ?? undefined);
+const VIRUSTOTAL_SCAN_URL = 'https://www.virustotal.com/api/v3/files';
+
+async function scanFileWithVirusTotal(fileBuffer: Uint8Array): Promise<any> {
+  if (!VIRUSTOTAL_API_KEY) {
+    throw new Error('VirusTotal API key not configured');
+  }
+  const formData = new FormData();
+  formData.append('file', new Blob([fileBuffer]));
+  const response = await fetch(VIRUSTOTAL_SCAN_URL, {
+    method: 'POST',
+    headers: {
+      'x-apikey': VIRUSTOTAL_API_KEY,
+    },
+    body: formData,
+  });
+  if (!response.ok) {
+    throw new Error('VirusTotal scan failed');
+  }
+  const result = await response.json();
+  return result;
+}
+
+async function getVirusTotalReport(analysisId: string): Promise<any> {
+  const url = `https://www.virustotal.com/api/v3/analyses/${analysisId}`;
+  const response = await fetch(url, {
+    headers: {
+      'x-apikey': VIRUSTOTAL_API_KEY,
+    },
+  });
+  if (!response.ok) {
+    throw new Error('VirusTotal report fetch failed');
+  }
+  return await response.json();
 }
 
 interface FileInfo {
@@ -106,7 +143,7 @@ export default async function handler(request: Request) {
   }
 
   try {
-    const { url, action }: DownloadRequest = await request.json();
+    const { url, action, scanForViruses }: DownloadRequest = await request.json();
 
     if (!url) {
       return new Response(JSON.stringify({ error: 'URL is required' }), {
@@ -135,13 +172,46 @@ export default async function handler(request: Request) {
     if (action === 'download') {
       const fileInfo = await getFileInfo(url);
       const response = await fetch(url);
-      
       if (!response.ok) {
         throw new Error(`Download failed: ${response.status} ${response.statusText}`);
       }
+      const arrayBuffer = await response.arrayBuffer();
+      const fileBuffer = new Uint8Array(arrayBuffer);
+
+      if (scanForViruses) {
+        // Scan file with VirusTotal
+        try {
+          const scanResult = await scanFileWithVirusTotal(fileBuffer);
+          const analysisId = scanResult.data.id;
+          // Poll for report (simple wait, ideally use exponential backoff)
+          let report;
+          for (let i = 0; i < 10; i++) {
+            await new Promise(res => setTimeout(res, 3000));
+            report = await getVirusTotalReport(analysisId);
+            if (report.data.attributes.status === 'completed') break;
+          }
+          if (report.data.attributes.stats.malicious > 0) {
+            return new Response(JSON.stringify({
+              error: 'File flagged as malicious by VirusTotal',
+              virusTotal: report.data.attributes,
+            }), {
+              status: 403,
+              headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+            });
+          }
+        } catch (err) {
+          return new Response(JSON.stringify({
+            error: 'VirusTotal scan failed',
+            details: err instanceof Error ? err.message : String(err),
+          }), {
+            status: 500,
+            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+          });
+        }
+      }
 
       // Stream the file back to the client
-      return new Response(response.body, {
+      return new Response(new Blob([fileBuffer]), {
         headers: {
           ...corsHeaders,
           'Content-Type': fileInfo.type,

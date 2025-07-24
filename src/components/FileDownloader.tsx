@@ -28,6 +28,8 @@ const FileDownloader: React.FC = () => {
   const [downloadedBlob, setDownloadedBlob] = useState<Blob | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [currentStageIndex, setCurrentStageIndex] = useState(0);
+  const [scanForViruses, setScanForViruses] = useState(false);
+  const [virusScanResult, setVirusScanResult] = useState<any>(null);
   const [stages, setStages] = useState<DownloadStage[]>([
     {
       name: 'access-check',
@@ -123,6 +125,7 @@ const FileDownloader: React.FC = () => {
     setFileInfo(null);
     setDownloadedBlob(null);
     setError(null);
+    setVirusScanResult(null);
     setCurrentStageIndex(0);
 
     // Reset stages
@@ -146,48 +149,38 @@ const FileDownloader: React.FC = () => {
     try {
       // Stage 1: Access check and get file info
       await simulateAccessCheck(0);
-      
       const info = await getFileInfo(url);
       setFileInfo(info);
-      
-      // Short pause between stages
       await new Promise(resolve => setTimeout(resolve, 500));
-      
+
       // Stage 2: Actual download
       setCurrentStageIndex(1);
       updateStageProgress(1, 0, `Downloading ${info.name}...`);
-      
-      const blob = await downloadFile(info, (progress: DownloadProgress) => {
-        const message = progress.percentage < 50 
-          ? `Downloading ${info.name}... (${formatFileSize(progress.loaded)} / ${formatFileSize(progress.total)})`
-          : `Almost done... (${formatFileSize(progress.loaded)} / ${formatFileSize(progress.total)})`;
-        
-        updateStageProgress(1, progress.percentage, message);
+
+      // --- Download via backend with virus scan option ---
+      const res = await fetch('/api/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, action: 'download', scanForViruses }),
       });
-      
+
+      if (res.status === 403) {
+        const result = await res.json();
+        setError(result.error || 'File flagged as malicious');
+        setVirusScanResult(result.virusTotal || null);
+        return;
+      }
+      if (!res.ok) {
+        const result = await res.json().catch(() => ({}));
+        setError(result.error || 'Download failed');
+        return;
+      }
+      const blob = await res.blob();
       setDownloadedBlob(blob);
-      
-      // Success!
       setCanInstantDownload(true);
-      
     } catch (error) {
-      const errorMessage = error instanceof FileDownloadError 
-        ? error.message 
-        : 'An unexpected error occurred';
-      
-      setError(errorMessage);
-      
-      // Update current stage to show error
-      setStages(prev => prev.map((stage, index) => {
-        if (index === currentStageIndex) {
-          return {
-            ...stage,
-            color: 'red' as const,
-            message: `Error: ${errorMessage}`
-          };
-        }
-        return stage;
-      }));
+      setError(error instanceof FileDownloadError ? error.message : 'An unexpected error occurred');
+      setCanInstantDownload(false);
     } finally {
       setIsProcessing(false);
     }
@@ -275,6 +268,19 @@ const FileDownloader: React.FC = () => {
             </div>
           )}
 
+          <div className="flex items-center gap-3 mb-4">
+            <input
+              type="checkbox"
+              id="scanForViruses"
+              checked={scanForViruses}
+              onChange={e => setScanForViruses(e.target.checked)}
+              disabled={isProcessing}
+              className="form-checkbox h-4 w-4 text-blue-600"
+            />
+            <label htmlFor="scanForViruses" className="text-sm text-gray-700">
+              Scan file for viruses before downloading (VirusTotal)
+            </label>
+          </div>
           <button
             onClick={handleDownload}
             disabled={!url.trim() || !isValidUrl(url) || isProcessing}
@@ -300,6 +306,14 @@ const FileDownloader: React.FC = () => {
                 <div>
                   <p className="font-medium text-red-900">Download Failed</p>
                   <p className="text-sm text-red-700">{error}</p>
+                  {virusScanResult && (
+                    <div className="mt-2 text-xs text-red-700">
+                      <strong>VirusTotal scan result:</strong><br />
+                      Malicious: {virusScanResult.stats?.malicious ?? 0}<br />
+                      Suspicious: {virusScanResult.stats?.suspicious ?? 0}<br />
+                      Harmless: {virusScanResult.stats?.harmless ?? 0}<br />
+                    </div>
+                  )}
                 </div>
               </div>
               <button

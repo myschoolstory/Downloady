@@ -171,6 +171,18 @@ export default async function handler(request: Request) {
 
     if (action === 'download') {
       const fileInfo = await getFileInfo(url);
+      const SIZE_LIMIT = 128 * 1024 * 1024; // 128MB
+      if (fileInfo.size > SIZE_LIMIT) {
+        // For large files, redirect client to download directly
+        return new Response(null, {
+          status: 302,
+          headers: {
+            ...corsHeaders,
+            'Location': url,
+            'X-Downloady-Redirect-Reason': 'File exceeds edge function size limit',
+          },
+        });
+      }
       const response = await fetch(url);
       if (!response.ok) {
         throw new Error(`Download failed: ${response.status} ${response.statusText}`);

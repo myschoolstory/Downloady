@@ -6,7 +6,7 @@ interface DownloadRequest {
   scanForViruses?: boolean;
 }
 // --- VirusTotal API integration ---
-const VIRUSTOTAL_API_KEY = process.env.VIRUSTOTAL_API_KEY;
+const VIRUSTOTAL_API_KEY = process?.env?.VIRUSTOTAL_API_KEY || globalThis.VIRUSTOTAL_API_KEY;
 const VIRUSTOTAL_SCAN_URL = 'https://www.virustotal.com/api/v3/files';
 
 const scanFileWithVirusTotal = async (fileBuffer: Uint8Array): Promise<any> => {
@@ -17,9 +17,9 @@ const scanFileWithVirusTotal = async (fileBuffer: Uint8Array): Promise<any> => {
   formData.append('file', new Blob([fileBuffer]));
   const response = await fetch(VIRUSTOTAL_SCAN_URL, {
     method: 'POST',
-    headers: [
-      ['x-apikey', VIRUSTOTAL_API_KEY ?? '']
-    ],
+    headers: {
+      'x-apikey': VIRUSTOTAL_API_KEY ?? '',
+    },
     body: formData,
   });
   if (!response.ok) {
@@ -134,7 +134,8 @@ export default async function handler(request: Request) {
   }
 
   try {
-    const { url, action }: DownloadRequest = await request.json();
+    const body: DownloadRequest = await request.json();
+    const { url, action, scanForViruses } = body;
 
     if (!url) {
       return new Response(JSON.stringify({ error: 'URL is required' }), {
@@ -162,7 +163,6 @@ export default async function handler(request: Request) {
 
     if (action === 'download') {
       const fileInfo = await getFileInfo(url);
-      const { scanForViruses } = (await request.json()) as DownloadRequest;
       const response = await fetch(url);
       if (!response.ok) {
         throw new Error(`Download failed: ${response.status} ${response.statusText}`);

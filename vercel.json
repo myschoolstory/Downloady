@@ -1,0 +1,13 @@
+{
+  "functions": {
+    "api/download.ts": {
+      "runtime": "edge"
+    }
+  },
+  "rewrites": [
+    {
+      "source": "/api/download",
+      "destination": "/api/download.ts"
+    }
+  ]
+}
